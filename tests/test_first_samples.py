@@ -86,3 +86,30 @@ def test_shaft_diameters_are_real_semantic_dimensions(tmp_path):
     handles = definition["drawing"]["dimension_handles"]
     assert set(handles) == {f"D0{i}" for i in range(1, 7)}
     assert {round(doc.entitydb[handles[f"D0{i}"]].get_measurement(), 4) for i in (4, 5, 6)} == {20, 30, 40}
+
+
+def test_shaft_dimensions_follow_turning_drawing_layout(tmp_path):
+    """轴类尺寸按功能分区：长度在下方分层、直径归属轴段且无漂浮引线。"""
+    spec = next(s for s in specifications() if s.family == "shaft")
+    generate_one(spec, tmp_path, with_previews=False)
+    doc = ezdxf.readfile(tmp_path / spec.part_id / "drawing.dxf")
+    drawing = __import__("json").loads(
+        (tmp_path / spec.part_id / "definition.json").read_text(encoding="utf-8")
+    )["drawing"]
+    dims = {key: doc.entitydb[handle]
+            for key, handle in drawing["dimension_handles"].items()}
+
+    # 轴向长度放在负 Y 一侧，并保持局部尺寸靠近、总体尺寸在外层。
+    assert dims["D01"].dxf.defpoint.y < dims["D02"].dxf.defpoint.y
+    assert dims["D01"].dxf.defpoint.y < dims["D03"].dxf.defpoint.y
+    assert dims["D02"].dxf.defpoint.y < -20
+    assert dims["D03"].dxf.defpoint.y < -20
+    # 两条外侧直径尺寸线不得穿过零件轮廓，圆柱中间尺寸的文字放在轮廓上方。
+    assert dims["D04"].dxf.defpoint.x < -65
+    assert dims["D06"].dxf.defpoint.x > 55
+    assert dims["D05"].dxf.text_midpoint.y > 15
+    assert all(dim.dxf.text.startswith("%%c") for dim in (dims["D04"], dims["D05"], dims["D06"]))
+    assert len(doc.modelspace().query("LEADER")) == 0
+    # 没有键槽与内部台阶的纯回转轴不应虚构断面图。
+    assert not doc.modelspace().query("HATCH")
+    assert all(view["kind"] == "orthographic" for view in drawing["views"])
