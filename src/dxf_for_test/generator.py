@@ -10,7 +10,6 @@ import ezdxf
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 from .models import build_part, specifications
 from .drawing import build_drawing
@@ -32,23 +31,31 @@ def save_preview_dxf(path: Path, preview: Path) -> None:
 
 
 def save_preview_3d(shape: cq.Shape, preview: Path) -> None:
-    points, triangles = shape.tessellate(0.8, 0.3)
-    coords = [p.toTuple() for p in points]
-    polys = [[coords[i] for i in tri] for tri in triangles]
-    fig = plt.figure(figsize=(8, 7), dpi=130)
-    ax = fig.add_subplot(111, projection="3d")
-    mesh = Poly3DCollection(polys, linewidths=0, edgecolors="none",
-                            facecolors=(.70, .80, .89, 1))
-    ax.add_collection3d(mesh)
-    bb = shape.BoundingBox()
-    ranges = (bb.xmin, bb.xmax, bb.ymin, bb.ymax, bb.zmin, bb.zmax)
-    ax.set(xlim=(ranges[0], ranges[1]), ylim=(ranges[2], ranges[3]),
-           zlim=(ranges[4], ranges[5]))
-    ax.set_box_aspect((max(bb.xlen, 1), max(bb.ylen, 1), max(bb.zlen, 1)), zoom=.85)
-    ax.view_init(elev=26, azim=-57)
-    ax.set_axis_off()
-    fig.savefig(preview, bbox_inches="tight", facecolor="white")
-    plt.close(fig)
+    """使用 CAD B-Rep 的真实等轴投影预览，避免网格绘图库的背面遮挡错误。"""
+    from io import BytesIO
+    from tempfile import TemporaryDirectory
+
+    import cairosvg
+    from PIL import Image, ImageChops
+
+    with TemporaryDirectory() as temp:
+        source = Path(temp) / "view.svg"
+        cq.exporters.export(shape, str(source), exportType="SVG",
+                            opt={"projectionDir": (1, -1, 1), "showHidden": False,
+                                 "strokeWidth": 1.4})
+        raw = cairosvg.svg2png(url=str(source), scale=2.0, background_color="#ffffff")
+    drawing = Image.open(BytesIO(raw)).convert("RGB")
+    diff = ImageChops.difference(drawing, Image.new("RGB", drawing.size, "white"))
+    bounds = diff.getbbox()
+    if not bounds:
+        raise RuntimeError("三维预览投影为空")
+    drawing = drawing.crop((max(0, bounds[0] - 15), max(0, bounds[1] - 15),
+                            min(drawing.width, bounds[2] + 15),
+                            min(drawing.height, bounds[3] + 15)))
+    drawing.thumbnail((780, 640))
+    canvas = Image.new("RGB", (900, 720), "white")
+    canvas.paste(drawing, ((900 - drawing.width) // 2, (720 - drawing.height) // 2))
+    canvas.save(preview)
 
 
 def sha256(path: Path) -> str:

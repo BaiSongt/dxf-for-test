@@ -7,7 +7,7 @@ name = "dxf-for-test"
 version = "0.1.0"
 description = "参数化机械零件 STEP 与 DXF 基准样例生成器"
 requires-python = ">=3.11"
-dependencies = ["cadquery>=2.5,<3", "ezdxf>=1.4,<2", "matplotlib>=3.8,<4", "numpy>=1.26,<3"]
+dependencies = ["cadquery>=2.5,<3", "ezdxf>=1.4,<2", "matplotlib>=3.8,<4", "numpy>=1.26,<3", "CairoSVG>=2.7,<3", "Pillow>=10,<13"]
 
 [project.optional-dependencies]
 test = ["pytest>=8,<10"]
