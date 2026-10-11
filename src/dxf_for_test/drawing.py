@@ -37,33 +37,48 @@ def _dim(msp, p1, p2, base, angle=0, text="<>", override=None):
     return dim.dimension.dxf.handle
 
 
-def _shaft_diameter_dim(msp, x: float, diameter: float, tolerance: float | None = None) -> str:
-    """在轴的纵向视图以真实上下母线生成直径 DIMENSION，而非悬空文字。"""
+def _shaft_diameter_dim(
+    msp,
+    *,
+    x_face: float,
+    x_dimension: float,
+    diameter: float,
+    tolerance: float | None = None,
+) -> str:
+    """在轴的纵向投影上，以两条圆柱母线产生原生直径尺寸。
+
+    - x_face 必须位于被测量的圆柱轴段内；尺寸点落在上下轮廓上。
+    - x_dimension 控制竖向尺寸线，不使用斜向 leader 把文字拉到零件外。
+    - 长短轴段可分别采取外置或轮廓内的竖向尺寸线，文字随 DIMENSION 排版。
+    - 直径由真实投影跨度计算，避免把任意注释伪装成 PMI 尺寸。
+    """
     radius = diameter / 2
     dim = msp.add_linear_dim(
-        base=(x, 0),
-        p1=(x, -radius),
-        p2=(x, radius),
+        base=(x_dimension, 0),
+        p1=(x_face, -radius),
+        p2=(x_face, radius),
         angle=90,
         text="%%c<>",
+        text_rotation=0 if tolerance is not None else None,
         dxfattribs={"layer": "DIMENSIONS"},
         override={
             "dimlfac": 1,
-            "dimtxt": 3,
-            "dimasz": 2,
+            "dimtxt": 3.3,
+            "dimasz": 1.8,
             "dimdec": 0,
             "dimzin": 8,
             "dimtad": 1,
-            "dimtih": 1,
-            "dimtoh": 1,
-            "dimse1": 1,
-            "dimse2": 1,
+            "dimtih": 0,
+            "dimtoh": 0,
+            "dimse1": 1 if abs(x_face - x_dimension) < 0.01 else 0,
+            "dimse2": 1 if abs(x_face - x_dimension) < 0.01 else 0,
+            "dimexe": 1.5,
+            "dimexo": 1.0,
         },
     )
     if tolerance is not None:
-        dim.set_tolerance(upper=tolerance, lower=tolerance, hfactor=0.8, dec=2)
-    # 标注移至轴外，避免与回转中心线重合；保留原生 DXF 尺寸关联。
-    dim.set_location((x, -radius - 10), leader=True)
+        dim.set_tolerance(upper=tolerance, lower=tolerance, hfactor=0.7, dec=2)
+        dim.set_location((x_dimension, radius + 7), leader=False)
     dim.render()
     return dim.dimension.dxf.handle
 
@@ -160,33 +175,42 @@ def build_drawing(spec: PartSpec, solid: cq.Shape, target: Path) -> dict:
         count = draw_projected(msp, projected_edges(solid, "front"), (x0, 0))
         views.append({"id": "front", "kind": "orthographic", "scale": 1,
                       "origin": [x0, 0], "geometry_count": count})
-        end_center = (125, 0)
+        # 对于当前没有键槽的简单阶梯轴，端视图足以核对投影，禁止虚构断面。
+        end_center = (132, 2)
         end_count = draw_projected(msp, projected_edges(solid, "end"), end_center)
         views.append({"id": "end", "kind": "orthographic", "scale": 1,
                       "origin": list(end_center), "geometry_count": end_count})
-        # 纵向视图的尺寸关联真实 B-Rep 投影母线，不使用脱离几何的注释。
-        dim_handles["D01"] = _dim(msp, (x0, d1 / 2), (x3, d3 / 2),
-                                   ((x0 + x3) / 2, 54))
-        dim_handles["D02"] = _dim(msp, (x0, d1 / 2), (x1, d1 / 2),
-                                   ((x0 + x1) / 2, 43))
-        dim_handles["D03"] = _dim(msp, (x1, d2 / 2), (x2, d2 / 2),
-                                   ((x1 + x2) / 2, 34))
-        dim_handles["D04"] = _shaft_diameter_dim(msp, (x0 + x1) / 2, d1)
-        dim_handles["D05"] = _shaft_diameter_dim(msp, (x1 + x2) / 2, d2, tolerance=0.05)
-        dim_handles["D06"] = _shaft_diameter_dim(msp, (x2 + x3) / 2, d3)
-        # 回转轴线与端视图中心十字，均使用中心线线型。
-        msp.add_line((x0 - 10, 0), (x3 + 10, 0),
+        # 参考真实轴类图：轴向尺寸集中在主视图下方，以近轮廓到远轮廓分层排列。
+        dim_handles["D02"] = _dim(msp, (x0, -d1 / 2), (x1, -d1 / 2),
+                                   ((x0 + x1) / 2, -35))
+        dim_handles["D03"] = _dim(msp, (x1, -d2 / 2), (x2, -d2 / 2),
+                                   ((x1 + x2) / 2, -35))
+        dim_handles["D01"] = _dim(msp, (x0, -d1 / 2), (x3, -d3 / 2),
+                                   ((x0 + x3) / 2, -56))
+        # 直径尺寸在纵向视图各自的圆柱段上定义；端部移出外轮廓，避免交叉引线。
+        dim_handles["D04"] = _shaft_diameter_dim(
+            msp, x_face=x0 + 7, x_dimension=x0 - 14, diameter=d1)
+        dim_handles["D05"] = _shaft_diameter_dim(
+            msp, x_face=(x1 + x2) / 2, x_dimension=(x1 + x2) / 2,
+            diameter=d2, tolerance=0.05)
+        dim_handles["D06"] = _shaft_diameter_dim(
+            msp, x_face=x3 - 5, x_dimension=x3 + 13, diameter=d3)
+        # 长点画线表示回转中心；端视图仅画必要的中心十字。
+        msp.add_line((x0 - 8, 0), (x3 + 8, 0),
                      dxfattribs={"layer": "CENTER", "linetype": "CENTER2"})
         ex, ey = end_center
         msp.add_line((ex - d1 / 2 - 5, ey), (ex + d1 / 2 + 5, ey),
                      dxfattribs={"layer": "CENTER", "linetype": "CENTER2"})
         msp.add_line((ex, ey - d1 / 2 - 5), (ex, ey + d1 / 2 + 5),
                      dxfattribs={"layer": "CENTER", "linetype": "CENTER2"})
-        _text(msp, "主视图", -17, -47)
-        _text(msp, "左端视图", 110, -42)
-        _datum(msp, -92, -31, point=(-45, -20))
-        _text(msp, "A: Ø40 轴段公共轴线", -95, -56, 3)
-        _frame(msp, f"{spec.part_id}  {spec.name}", (-108, -100, 235, 95))
+        _text(msp, "主视图", -20, -74, 3)
+        _text(msp, "端视图", 118, -34, 3)
+        # 基准 A 关联指定直径要素；不把任意未定位的字母视为真实 PMI。
+        _datum(msp, -48, 28, point=(-48, 20))
+        _text(msp, "A: Ø40 基准圆柱面所导出轴线", -88, -85, 3)
+        _text(msp, "1. 未注线性尺寸公差 ±0.20 mm", -88, -92, 3)
+        _text(msp, "2. 去除毛刺和锐边", -88, -99, 3)
+        _frame(msp, f"{spec.part_id}  {spec.name}", (-110, -132, 242, 91))
     elif spec.family == "pocket":
         count = draw_projected(msp, projected_edges(solid, "top"), (0, 22))
         views.append({"id": "top", "kind": "orthographic", "scale": 1,
