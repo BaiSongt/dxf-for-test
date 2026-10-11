@@ -28,11 +28,42 @@ def _text(msp, content, x, y, height=3.2, layer="NOTES"):
 
 def _dim(msp, p1, p2, base, angle=0, text="<>", override=None):
     options = {"dimtxt": 3, "dimasz": 2, "dimexe": 1.5, "dimexo": 1.5,
-               "dimtad": 1, "dimdec": 1}
+               "dimtad": 1, "dimdec": 0, "dimlfac": 1, "dimzin": 8}
     if override:
         options.update(override)
     dim = msp.add_linear_dim(base=base, p1=p1, p2=p2, angle=angle, text=text,
                              dxfattribs={"layer": "DIMENSIONS"}, override=options)
+    dim.render()
+    return dim.dimension.dxf.handle
+
+
+def _shaft_diameter_dim(msp, x: float, diameter: float, tolerance: float | None = None) -> str:
+    """在轴的纵向视图以真实上下母线生成直径 DIMENSION，而非悬空文字。"""
+    radius = diameter / 2
+    dim = msp.add_linear_dim(
+        base=(x, 0),
+        p1=(x, -radius),
+        p2=(x, radius),
+        angle=90,
+        text="%%c<>",
+        dxfattribs={"layer": "DIMENSIONS"},
+        override={
+            "dimlfac": 1,
+            "dimtxt": 3,
+            "dimasz": 2,
+            "dimdec": 0,
+            "dimzin": 8,
+            "dimtad": 1,
+            "dimtih": 1,
+            "dimtoh": 1,
+            "dimse1": 1,
+            "dimse2": 1,
+        },
+    )
+    if tolerance is not None:
+        dim.set_tolerance(upper=tolerance, lower=tolerance, hfactor=0.8, dec=2)
+    # 标注移至轴外，避免与回转中心线重合；保留原生 DXF 尺寸关联。
+    dim.set_location((x, -radius - 10), leader=True)
     dim.render()
     return dim.dimension.dxf.handle
 
@@ -101,6 +132,9 @@ def build_drawing(spec: PartSpec, solid: cq.Shape, target: Path) -> dict:
     doc = ezdxf.new("R2018", setup=True)
     doc.header["$INSUNITS"] = 4
     doc.header["$MEASUREMENT"] = 1
+    # ezdxf 预置样式默认 DIMLFAC=100，mm 模型必须以 1:1 测量。
+    doc.header["$DIMLFAC"] = 1
+    doc.dimstyles.get("EZDXF").dxf.dimlfac = 1
     doc.styles.new("CJK", dxfattribs={"font": "NotoSansCJK-Regular.ttc"})
     for name, color in LAYERS.items():
         doc.layers.new(name, dxfattribs={"color": color})
@@ -117,21 +151,37 @@ def build_drawing(spec: PartSpec, solid: cq.Shape, target: Path) -> dict:
         _text(msp, "未注线性尺寸公差 ±0.2 mm", -76, -46)
         _frame(msp, f"{spec.part_id}  {spec.name}", (-100, -84, 180, 105))
     elif spec.family == "shaft":
-        count = draw_projected(msp, projected_edges(solid, "front"), (-65, 0))
+        p = spec.parameters
+        x0 = -65
+        x1 = x0 + p["length_1"]
+        x2 = x1 + p["length_2"]
+        x3 = x2 + p["length_3"]
+        d1, d2, d3 = (p[f"diameter_{i}"] for i in (1, 2, 3))
+        count = draw_projected(msp, projected_edges(solid, "front"), (x0, 0))
         views.append({"id": "front", "kind": "orthographic", "scale": 1,
-                      "origin": [-65, 0], "geometry_count": count})
-        end_count = draw_projected(msp, projected_edges(solid, "end"), (125, 0))
+                      "origin": [x0, 0], "geometry_count": count})
+        end_center = (125, 0)
+        end_count = draw_projected(msp, projected_edges(solid, "end"), end_center)
         views.append({"id": "end", "kind": "orthographic", "scale": 1,
-                      "origin": [125, 0], "geometry_count": end_count})
-        _dim(msp, (-65, 20), (55, 10), (-5, 54))
-        _dim(msp, (-65, 20), (-25, 20), (-45, 43))
-        _dim(msp, (-25, 15), (25, 15), (0, 34))
-        dim = msp.add_diameter_dim(center=(125, 0), radius=20, angle=60,
-                                   override={"dimtxt": 3}, dxfattribs={"layer": "DIMENSIONS"})
-        dim.render()
-        # 轴向其余两段按原模型参数注释直径及公差。
-        _text(msp, "Ø30 ±0.05", -20, -32, 3.3, "DIMENSIONS")
-        _text(msp, "Ø20", 36, -26, 3.3, "DIMENSIONS")
+                      "origin": list(end_center), "geometry_count": end_count})
+        # 纵向视图的尺寸关联真实 B-Rep 投影母线，不使用脱离几何的注释。
+        dim_handles["D01"] = _dim(msp, (x0, d1 / 2), (x3, d3 / 2),
+                                   ((x0 + x3) / 2, 54))
+        dim_handles["D02"] = _dim(msp, (x0, d1 / 2), (x1, d1 / 2),
+                                   ((x0 + x1) / 2, 43))
+        dim_handles["D03"] = _dim(msp, (x1, d2 / 2), (x2, d2 / 2),
+                                   ((x1 + x2) / 2, 34))
+        dim_handles["D04"] = _shaft_diameter_dim(msp, (x0 + x1) / 2, d1)
+        dim_handles["D05"] = _shaft_diameter_dim(msp, (x1 + x2) / 2, d2, tolerance=0.05)
+        dim_handles["D06"] = _shaft_diameter_dim(msp, (x2 + x3) / 2, d3)
+        # 回转轴线与端视图中心十字，均使用中心线线型。
+        msp.add_line((x0 - 10, 0), (x3 + 10, 0),
+                     dxfattribs={"layer": "CENTER", "linetype": "CENTER2"})
+        ex, ey = end_center
+        msp.add_line((ex - d1 / 2 - 5, ey), (ex + d1 / 2 + 5, ey),
+                     dxfattribs={"layer": "CENTER", "linetype": "CENTER2"})
+        msp.add_line((ex, ey - d1 / 2 - 5), (ex, ey + d1 / 2 + 5),
+                     dxfattribs={"layer": "CENTER", "linetype": "CENTER2"})
         _text(msp, "主视图", -17, -47)
         _text(msp, "左端视图", 110, -42)
         _datum(msp, -92, -31, point=(-45, -20))
@@ -189,5 +239,6 @@ def build_drawing(spec: PartSpec, solid: cq.Shape, target: Path) -> dict:
         raise RuntimeError(f"DXF 内部校验失败：{len(errors.errors)}")
     doc.saveas(target)
     return {"views": views, "dimension_entities": len(msp.query("DIMENSION")),
+            "dimension_handles": dim_handles,
             "pmi_rendering": "editable_2d_graphical_annotations",
             "dxf_version": "AC1032"}
