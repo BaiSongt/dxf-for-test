@@ -1,5 +1,9 @@
-# Python
+# 缓存与临时产物
 __pycache__/
 .pytest_cache/
 *.pyc
 .venv/
+*.egg-info/
+build/
+dist/
+samples/
