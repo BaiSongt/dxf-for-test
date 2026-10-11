@@ -18,9 +18,10 @@ def test_geometry_is_valid(spec):
 
 
 def test_views_are_derived_from_the_same_brep():
-    plate, shaft, pocket = specifications()
+    plate, shaft, keyed, pocket = specifications()
     assert len(projected_edges(build_part(plate), "top")) == 4
     assert projected_edges(build_part(shaft), "end")
+    assert projected_edges(build_part(keyed), "front")
     pocket_shape = build_part(pocket)
     section = section_y_zero(pocket_shape)
     assert section.isValid()

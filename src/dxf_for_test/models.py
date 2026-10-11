@@ -46,6 +46,36 @@ def specifications() -> tuple[PartSpec, ...]:
             pi * (20**2 * 40 + 15**2 * 50 + 10**2 * 30),
         ),
         PartSpec(
+            "L05-001", "双键槽阶梯传动轴", 5, "shaft_keyed",
+            {"length_1": 55, "length_2": 80, "length_3": 75,
+             "diameter_1": 40, "diameter_2": 30, "diameter_3": 24,
+             "keyway_A_center": 28, "keyway_A_length": 36,
+             "keyway_A_width": 12, "keyway_A_depth": 4.5,
+             "keyway_B_center": 174, "keyway_B_length": 42,
+             "keyway_B_width": 8, "keyway_B_depth": 3},
+            ("front", "section_AA", "section_BB"),
+            ({"id": "D01", "type": "linear", "value": 210, "feature": "total_length"},
+             {"id": "D02", "type": "linear", "value": 55, "feature": "segment_1"},
+             {"id": "D03", "type": "linear", "value": 80, "feature": "segment_2"},
+             {"id": "D04", "type": "diameter", "value": 40, "feature": "shaft_large"},
+             {"id": "D05", "type": "diameter", "value": 30, "feature": "shaft_middle"},
+             {"id": "D06", "type": "diameter", "value": 24, "feature": "shaft_small"},
+             {"id": "D07", "type": "linear", "value": 36, "feature": "keyway_A_length"},
+             {"id": "D08", "type": "linear", "value": 42, "feature": "keyway_B_length"},
+             {"id": "D09", "type": "linear", "value": 12, "feature": "keyway_A_width"},
+             {"id": "D10", "type": "linear", "value": 4.5, "feature": "keyway_A_depth"},
+             {"id": "D11", "type": "linear", "value": 8, "feature": "keyway_B_width"},
+             {"id": "D12", "type": "linear", "value": 3, "feature": "keyway_B_depth"}),
+            ({"id": "P01", "type": "datum", "value": "A", "feature": "shaft_large_axis"},
+             {"id": "P02", "type": "size_tolerance", "value": "⌀30 ±0.05",
+              "feature": "shaft_middle"},
+             {"id": "P03", "type": "size_tolerance", "value": "键槽 A 宽度 12 ±0.04",
+              "feature": "keyway_A_width"},
+             {"id": "P04", "type": "size_tolerance", "value": "键槽 B 宽度 8 ±0.04",
+              "feature": "keyway_B_width"}),
+            157004.54806467931,
+        ),
+        PartSpec(
             "L06-001", "带岛体的深腔安装板", 6, "pocket",
             {"length": 160, "width": 110, "height": 40,
              "pocket_length": 120, "pocket_width": 70, "pocket_depth": 25,
@@ -81,6 +111,32 @@ def build_part(spec: PartSpec) -> cq.Shape:
         solids = [cq.Solid.makeCylinder(d / 2, length, cq.Vector(x, 0, 0), cq.Vector(1, 0, 0))
                   for x, length, d in segments]
         shape = solids[0].fuse(*solids[1:]).clean()
+    elif spec.family == "shaft_keyed":
+        segments = ((0, p["length_1"], p["diameter_1"]),
+                    (p["length_1"], p["length_2"], p["diameter_2"]),
+                    (p["length_1"] + p["length_2"], p["length_3"], p["diameter_3"]))
+        cylinders = [cq.Solid.makeCylinder(d / 2, length, cq.Vector(x, 0, 0),
+                                            cq.Vector(1, 0, 0))
+                     for x, length, d in segments]
+        shape = cylinders[0].fuse(*cylinders[1:]).clean()
+        for label, diameter, begin, end in (
+            ("A", p["diameter_1"], 0, p["length_1"]),
+            ("B", p["diameter_3"], p["length_1"] + p["length_2"],
+             p["length_1"] + p["length_2"] + p["length_3"]),
+        ):
+            width = p[f"keyway_{label}_width"]
+            length = p[f"keyway_{label}_length"]
+            depth = p[f"keyway_{label}_depth"]
+            x_center = p[f"keyway_{label}_center"]
+            if (width <= 0 or length <= width or not 0 < depth < diameter / 2 or
+                    x_center - length / 2 <= begin or x_center + length / 2 >= end):
+                raise ValueError(f"键槽 {label} 的尺寸或轴向范围非法")
+            # 圆头键槽由 XZ 平面上的实际长圆槽拉伸成刀具扫掠体，沿 -Y 切入圆柱。
+            # 圆头两端的几何不是由 2D 图纸伪造；断面直接由此 B-Rep 剖切派生。
+            cutter = (cq.Workplane("XZ").center(x_center, 0)
+                      .slot2D(length, width).extrude(depth + 10)
+                      .translate((0, -(diameter / 2 - depth), 0)).val())
+            shape = shape.cut(cutter).clean()
     elif spec.family == "pocket":
         body = cq.Workplane("XY").box(p["length"], p["width"], p["height"],
                                       centered=(True, True, False)).val()

@@ -1,4 +1,4 @@
-"""生成首轮 3 套 STEP/DXF/JSON/PNG 并执行确定性数据检查。"""
+"""从统一参数化 B-Rep 生成 STEP/DXF/JSON/PNG，并执行确定性检查。"""
 import argparse
 import hashlib
 import json
@@ -75,6 +75,12 @@ def generate_one(spec, output: Path, with_previews=True) -> dict:
     step_path = folder / "part.step"
     dxf_path = folder / "drawing.dxf"
     cq.exporters.export(solid, str(step_path), exportType="STEP")
+    # STEP 重新加载是交付检查，而不只检查源 CadQuery 对象是否合法。
+    loaded = cq.importers.importStep(str(step_path)).val()
+    step_roundtrip_ok = (loaded.isValid() and len(loaded.Solids()) == 1 and
+                         isclose(loaded.Volume(), solid.Volume(), rel_tol=1e-7, abs_tol=1e-5))
+    if not step_roundtrip_ok:
+        raise RuntimeError(f"STEP 导出往返不一致：{spec.part_id}")
     drawing = build_drawing(spec, solid, dxf_path)
     reread = ezdxf.readfile(dxf_path)
     errors = reread.audit()
@@ -104,7 +110,8 @@ def generate_one(spec, output: Path, with_previews=True) -> dict:
     validation = {"part_id": spec.part_id, "solid_valid": solid.isValid(),
                   "expected_volume_mm3": round(spec.expected_volume, 7),
                   "actual_volume_mm3": round(solid.Volume(), 7),
-                  "volume_check": True, "dxf_audit_errors": len(errors.errors),
+                  "volume_check": True, "step_roundtrip_valid": step_roundtrip_ok,
+                  "dxf_audit_errors": len(errors.errors),
                   "views": [v["id"] for v in drawing["views"]],
                   "native_dimensions": drawing["dimension_entities"],
                   "sha256": {name: sha256(folder / name) for name in ("part.step", "drawing.dxf")}}
@@ -114,7 +121,7 @@ def generate_one(spec, output: Path, with_previews=True) -> dict:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="生成首轮三种 DXF+STEP 基准零件")
+    parser = argparse.ArgumentParser(description="生成分级参数化 DXF+STEP 基准零件")
     parser.add_argument("--output", default="samples", help="输出目录")
     parser.add_argument("--no-preview", action="store_true", help="跳过 PNG 预览")
     args = parser.parse_args()
